@@ -15,7 +15,9 @@ import logging
 import struct
 import psutil
 from queue import Queue
+import PyCRC
 from PyCRC.CRC16 import CRC16
+
 
 
 #import wraper modules
@@ -31,6 +33,8 @@ import lib_startup
 # python version
 if PYTHON_VERSION:
 	print(sys.version)
+	print(sys.path)
+	print(PyCRC.__file__)
 	print(psutil.cpu_times())
 	pass
 
@@ -43,7 +47,7 @@ log_cmd = logging.StreamHandler()
 log_cmd.setFormatter(formatter)
 logger.addHandler(log_file)
 logger.addHandler(log_cmd)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.CRITICAL)
 
 
 # global variables
@@ -76,7 +80,9 @@ def serial_read_thread(run_event):
 				pass
 			found_msg = True
 			msg_count += 1
+			logger.info("msg read: %6d"%msg_count)
 			if found_msg == True:
+
 				port.timeout = 0.01
 				x = port.read(6)
 
@@ -106,7 +112,7 @@ def serial_read_thread(run_event):
 				if x[0] == 56:
 					ST_accel.deserialize(buf,1000)
 					ST_accel.get_m_x()
-					logger.info("%6.4f"%ST_accel.m_x)
+					logger.debug("%6.4f"%ST_accel.m_x)
 					pass
 
 				pass
@@ -159,7 +165,15 @@ def serial_write_thread(q,run_event):
 				range_dif = -range_dif
 				pass
 
+			#dead zone
+			if range_dif  >= -7 and range_dif <= 7:
+				range_dif = 0.0
+				pass
 
+			#gain K
+			K = 0.5
+			range_dif = K * range_dif
+			
 			ST.set_m_value(range_dif)
 			ST.serialize(buf,1000)
 			Len = np.array(ST.get_length(), dtype = np.uint16)
@@ -189,11 +203,14 @@ def serial_write_thread(q,run_event):
 			st_data += serialized
 	
 			k = port.write(st_data)
-			logger.info("send: %d"%k)
+			msg_count +=1
+			logger.info("msg write: %6d"%msg_count)
+			logger.debug("send: %d"%k)
 			time.sleep(0.01)
 			pass
 		pass
 	except Exception as e:
+		logger.debug("error in while loop")
 		raise e
 	############################
 
@@ -217,8 +234,11 @@ def ranger_read_thread(q,run_event):
 	if (timing < 20000):
 		timing = 20000
 	logger.debug("Timing %d ms" % (timing/1000))
+
+	count = 0
 	try:	
-		for count in range(1,10000):
+		#for count in range(1,10000):
+		while True:
 			if not run_event.is_set():
 				return
 				pass
@@ -227,10 +247,12 @@ def ranger_read_thread(q,run_event):
 			# Get distance from VL53L0X  on TCA9548A bus 2
 			distance2 = tof2.get_distance()
 			if distance1>0 and distance2>0:
-				logger.info("1: %6d mm    2: %6d mm    cnt: %6d"% (distance1,distance2,count))
+				count += 1
+				logger.debug("1: %6d mm    2: %6d mm    cnt: %6d"% (distance1,distance2,count))
 				#pack
 				ranger_dist = [distance1,distance2]
 				q.put(ranger_dist)
+				logger.info("ranger read: %6d"%count)
 				pass
 			pass
 		pass
@@ -254,7 +276,8 @@ def main():
 	ranger_thread.start()
 	try:
 		while True:
-			logger.info("cpu_percent: %4d, mem_percent: %4d"%(psutil.cpu_percent(interval=1), psutil.virtual_memory().percent))
+			logger.info("cpu_percent: %4d, cpu_count: %2d, mem_percent: %4d, "%(psutil.cpu_percent(interval=None), psutil.cpu_count(), psutil.virtual_memory().percent))
+			logger.critical("cpu_percent_per_core: %s"%str(psutil.cpu_percent(interval=None,percpu=True))[1:-1])
 			time.sleep(0.1)
 		pass
 	except KeyboardInterrupt:
